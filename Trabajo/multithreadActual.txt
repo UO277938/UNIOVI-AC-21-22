@@ -1,0 +1,148 @@
+/*
+ * Main.cpp
+ *
+ */
+
+#include <CImg.h>
+#include <math.h>
+#include <stdio.h>
+#include <pthread.h>
+#include <stdexcept>
+#include <sys/sysinfo.h>
+
+using namespace cimg_library;
+
+typedef double data_t;
+
+//CONSTANTES
+const char* SOURCE_IMG      = "bailarina.bmp";
+const char* SOURCE2_IMG   = "background_V.bmp";
+const char* DESTINATION_IMG = "bailarina2.bmp";
+
+struct timespec tStart, tEnd;
+double dElapsedTimeS;
+
+const int REPETITIONS = 30;
+const int NUMBER_OF_CORES = 4;
+const int NUM_HILOS = NUMBER_OF_CORES;
+
+struct ImgInfo {
+	double *pimg1;
+	double *pimg2;
+	double *pimgdest;
+	int start;
+	int end;
+};
+
+
+void *ejecutarAlgoritmo(void* imgInfo) {
+	struct ImgInfo *inf = (struct ImgInfo*) imgInfo;
+
+	for(int i = inf->start; i < inf->end; i++) {
+		inf->pimgdest[i] = (inf->pimg2[i]/255.0d) * ( (inf->pimg2[i]) + ((2.0d * (inf->pimg1[i]) )/255.0d) * (255.0d - (inf->pimg2[i])) );
+
+	}
+	return inf;
+}
+
+int main() {
+
+	
+	// Abrimos fichero e inicializamos imagenes
+	CImg<data_t> srcImage(SOURCE_IMG);
+	CImg<data_t> src2Image(SOURCE2_IMG);
+
+	//Comprobamos que existen
+	if(srcImage == NULL || src2Image == NULL){
+		perror("Alguna de las imagenes no existe");
+		exit(EXIT_FAILURE);
+	}
+	
+	//Comprobamos que el tamaño es el mismo
+	if(srcImage.height() != src2Image.height() || srcImage.width() != src2Image.width()){
+		perror("Las imagenes no tienen el mismo tamaño");
+		exit(EXIT_FAILURE);
+	}
+
+	//Mostramos las imagenes
+	srcImage.display(); 
+	src2Image.display(); 
+
+	//Propiedades de imagenes
+	uint width, height, size, nComp;
+	width = srcImage.width();
+	height = srcImage.height();
+	nComp  = srcImage.spectrum();
+	size = width * height * nComp;
+
+	if (size % NUM_HILOS != 0) {
+		perror("El tamaño es incorrecto");
+		exit(EXIT_FAILURE);
+	}
+
+	//Punteros a las imagenes
+	double *pCompImg; 
+	double *pCompImg2; 
+	double *pCompImgDest; 
+
+	const int PIXELES_POR_HILO = size/NUM_HILOS;
+	pthread_t th[NUM_HILOS];
+
+	// Inicializamos punteros
+	pCompImg = srcImage.data(); 
+	pCompImg2 = src2Image.data(); 
+	pCompImgDest = (double *) malloc(size * sizeof(double));
+
+	if (pCompImgDest == NULL) {
+		throw std::bad_alloc();
+	}
+
+	//Medidas algoritmo
+	if(clock_gettime(CLOCK_REALTIME, &tStart)==-1) {
+		perror("clock_gettime");
+		exit(EXIT_FAILURE);
+	}
+
+	for (int repeticiones = 0; repeticiones < REPETITIONS; repeticiones++) {
+
+		//Algoritmo
+		for(int numThread = 0; numThread < NUM_HILOS; numThread++) {
+			struct ImgInfo *inf = (struct ImgInfo*) malloc(sizeof(*inf));
+			inf->start = numThread * PIXELES_POR_HILO;
+			inf->end = inf->start + PIXELES_POR_HILO;
+			inf->pimg1 = pCompImg;
+			inf->pimg2 = pCompImg2;
+			inf->pimgdest = pCompImgDest;
+
+			pthread_create(&th[numThread], NULL, ejecutarAlgoritmo, ( void* ) inf);
+		}
+
+		// Esperamos a que terminen los hilos
+		for(int numThread = 0; numThread < NUM_HILOS; numThread++) {
+			pthread_join(th[numThread], NULL);
+		}
+
+	}
+
+	//Toma de tiempos
+	if(clock_gettime(CLOCK_REALTIME, &tEnd)==-1) {
+		perror("clock_gettime");
+		exit(EXIT_FAILURE);
+	}
+	dElapsedTimeS = (tEnd.tv_sec - tStart.tv_sec);
+	dElapsedTimeS += (tEnd.tv_nsec - tStart.tv_nsec)/1e+9;
+	printf("Elapsed time : %f s.\n", dElapsedTimeS);
+
+	
+	CImg<double> dstImage(pCompImgDest, width, height, 1, nComp);
+
+	// Guardamos la nueva imagen
+	dstImage.cut(0,255);
+	dstImage.save(DESTINATION_IMG);
+
+	// La mostramos
+	dstImage.display();
+
+
+	return (0);
+}
